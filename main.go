@@ -63,15 +63,23 @@ func main() {
 type Item struct{}
 
 type Queue struct {
-	items chan []Item
-	empty chan bool
+	s chan state
+}
+
+type waiter struct {
+	n int
+	c chan []Item
+}
+
+type state struct {
+	items []Item
+	wait  []waiter
 }
 
 func NewQueue() *Queue {
-	items := make(chan []Item, 1)
-	empty := make(chan bool, 1)
-	empty <- true
-	return &Queue{items, empty}
+	s := make(chan state, 1)
+	s <- state{}
+	return &Queue{s}
 }
 
 func (q *Queue) Get(ctx context.Context) (Item, error) {
@@ -91,12 +99,40 @@ func (q *Queue) Get(ctx context.Context) (Item, error) {
 	return item, nil
 }
 
-func (q *Queue) Put(item Item) {
-	var items []Item
-	select {
-	case items = <-q.items:
-	case <-q.empty:
+func (q *Queue) GetMany(n int) []Item {
+
+	s := <-q.s
+
+	if len(s.wait) == 0 && len(s.items) >= n { // нет ожидающих и есть данные
+		items := s.items[:n:n] // отрезаем данные и возвращаем состояние обратно в queue
+		s.items = s.items[n:]
+		q.s <- s
+		return items
 	}
-	items = append(items, item)
-	q.items <- items
+	c := make(chan []Item)                // если данных нет или их недостаточно создаем канал
+	s.wait = append(s.wait, waiter{n, c}) // включаем в список ожидающих и вешаемся на канале ожидания
+
+	q.s <- s
+
+	return <-c // не выходим, а вешаемся на канале ожидания
+}
+
+func (q *Queue) Put(item Item) {
+
+	s := <-q.s
+
+	s.items = append(s.items, item) // добавляем данные
+
+	for len(s.wait) > 0 { // если есть ожидающие, иначе просто выходим
+		w := s.wait[0]          // берем первого ожидающего
+		if len(s.items) < w.n { // если данных не хватает, то просто выходим
+			break
+		}
+		w.c <- s.items[:w.n:w.n] // а иначе отправляем в канал, но может ведь получится что никто и не читает канал
+		s.items = s.items[w.n:]
+		s.wait = s.wait[1:] // выключаем из режим ожидания
+	}
+
+	q.s <- s
+
 }
