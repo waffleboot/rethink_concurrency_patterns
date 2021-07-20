@@ -74,8 +74,13 @@ func NewQueue() *Queue {
 	return &Queue{items, empty}
 }
 
-func (q *Queue) Get() Item {
-	items := <-q.items
+func (q *Queue) Get(ctx context.Context) (Item, error) {
+	var items []Item
+	select {
+	case <-ctx.Done():
+		return Item{}, ctx.Err()
+	case items = <-q.items:
+	}
 	item := items[0]
 	items = items[1:]
 	if len(items) == 0 {
@@ -83,7 +88,7 @@ func (q *Queue) Get() Item {
 	} else {
 		q.items <- items
 	}
-	return item
+	return item, nil
 }
 
 func (q *Queue) Put(item Item) {
