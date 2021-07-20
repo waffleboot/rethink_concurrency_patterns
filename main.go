@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"sync"
 )
 
 type token struct{}
@@ -135,4 +136,37 @@ func (q *Queue) Put(item Item) {
 
 	q.s <- s
 
+}
+
+type Idler struct {
+	mu    sync.Mutex
+	idle  sync.Cond
+	busy  bool
+	idles int64
+}
+
+func (i *Idler) AwaitIdle() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	idles := i.idles
+	for i.busy && idles == i.idles {
+		i.idle.Wait()
+	}
+}
+
+func (i *Idler) SetBusy(b bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	wasBusy := i.busy
+	i.busy = b
+	if wasBusy && !b {
+		i.idles++
+		i.idle.Broadcast()
+	}
+}
+
+func NewIdler() *Idler {
+	i := new(Idler)
+	i.idle.L = &i.mu
+	return i
 }
